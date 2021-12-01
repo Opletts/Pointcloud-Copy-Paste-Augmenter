@@ -2,8 +2,10 @@ import os
 import random
 import numpy as np
 
-data_path = "./data/sequences/00"
-save_path = "./aug_data/sequences/00"
+from params import *
+
+data_path = DATA_PATH
+save_path = SAVE_PATH
 
 scan_names = os.listdir(os.path.join(data_path, "velodyne"))
 scan_names.sort()
@@ -11,11 +13,12 @@ scan_names.sort()
 label_names = os.listdir(os.path.join(data_path, "labels"))
 label_names.sort()
 
-cnt = 1
+placement_id = PLACEMENT_ID
+obj_paste_name = OBJ_PASTE_NAME
+obj_paste_id = LABEL_ID
 
-placement_id = 40
-obj_paste_name = 'moving-car'
-obj_paste_id = 252
+cnt  = 1
+fail = 0
 
 def axis_overlap(a_min1, a_max1, a_min2, a_max2):
     return a_max1 >= a_min2 and a_max2 >= a_min1
@@ -54,68 +57,86 @@ for i in range(len(scan_names)):
     scan = scan.reshape((-1, 4))
     label = label.reshape((-1, 1))
 
-    if label.shape[0] == scan.shape[0]:
-        sem_label  = label & 0xFFFF      # lower 16 bits extracted
-        inst_label = label >> 16         # upper 16 bits
-    
-    else:
-        print("Pointcloud and Label don't match.")
-        exit(0)
+    for num in range(NUMBER_INSTANCES):
+        if label.shape[0] == scan.shape[0]:
+            sem_label  = label & 0xFFFF      # lower 16 bits extracted
+            inst_label = label >> 16         # upper 16 bits
+        
+        else:
+            print("Pointcloud and Label don't match.")
+            exit(0)
 
-    object_list = os.listdir(obj_paste_name)
-    obj_to_paste = np.fromfile(os.path.join(obj_paste_name, random.choice(object_list)), dtype=np.float32)
-    obj_to_paste = obj_to_paste.reshape((-1, 4))
+        object_list = os.listdir(obj_paste_name)
+        obj_to_paste = np.fromfile(os.path.join(obj_paste_name, random.choice(object_list)), dtype=np.float32)
+        obj_to_paste = obj_to_paste.reshape((-1, 4))
 
-    obj_yaw = obj_to_paste[-1]
-    obj_to_paste = obj_to_paste[:-1]
+        obj_yaw = obj_to_paste[-1]
+        obj_to_paste = obj_to_paste[:-1]
 
-    placement_all = np.where(sem_label == placement_id)[0]
-    placement_id_yaw = -np.arctan2(scan[placement_all, 1], scan[placement_all, 0])
-    
-    lower_limit = np.where(placement_id_yaw > obj_yaw[0])[0]
-    upper_limit = np.where(placement_id_yaw < obj_yaw[1])[0]
-    threshold = np.intersect1d(lower_limit, upper_limit)
+        placement_all = []
+        for placement_id in placement_ids:
+            placement_temp = np.where(sem_label == placement_id)[0]
+            placement_all = np.unique(np.concatenate([placement_all, placement_temp]))
+            
+        placement_all = placement_all.astype(int)
+        placement_id_yaw = -np.arctan2(scan[placement_all, 1], scan[placement_all, 0])
 
-    placement_idx = placement_all[threshold]
+        lower_limit = np.where(placement_id_yaw > obj_yaw[0])[0]
+        upper_limit = np.where(placement_id_yaw < obj_yaw[1])[0]
+        threshold = np.intersect1d(lower_limit, upper_limit)
 
-    while True:
-        index = random.randint(0, len(placement_idx) - 1)
-        location = scan[placement_idx[index]]
-        obj_to_paste = obj_to_paste + location
+        placement_idx = placement_all[threshold]
 
-        placement_idx = np.delete(placement_idx, index)
+        while True and len(placement_idx):
+            index = random.randint(0, len(placement_idx) - 1)
+            location = scan[placement_idx[index]]
+            obj_to_paste = obj_to_paste + location
 
-        min_x_obj = np.min(obj_to_paste[:, 0])
-        max_x_obj = np.max(obj_to_paste[:, 0])
+            placement_idx = np.delete(placement_idx, index)
 
-        min_y_obj = np.min(obj_to_paste[:, 1])
-        max_y_obj = np.max(obj_to_paste[:, 1])
+            min_x_obj = np.min(obj_to_paste[:, 0])
+            max_x_obj = np.max(obj_to_paste[:, 0])
 
-        min_z_obj = np.min(obj_to_paste[:, 2])
-        max_z_obj = np.max(obj_to_paste[:, 2])
+            min_y_obj = np.min(obj_to_paste[:, 1])
+            max_y_obj = np.max(obj_to_paste[:, 1])
 
-        bbox = [(min_x_obj, min_y_obj, min_z_obj), (max_x_obj, max_y_obj, max_z_obj)]
-    
-        if is_overlap(scan, sem_label, inst_label, obj_paste_id, bbox):
-            continue
+            min_z_obj = np.min(obj_to_paste[:, 2])
+            max_z_obj = np.max(obj_to_paste[:, 2])
 
-        break
+            bbox = [(min_x_obj, min_y_obj, min_z_obj), (max_x_obj, max_y_obj, max_z_obj)]
+        
+            if is_overlap(scan, sem_label, inst_label, obj_paste_id, bbox):
+                continue
 
-    obj_idx = np.where(sem_label == obj_paste_id)[0]
-    obj_inst = inst_label[obj_idx]
+            break
 
-    new_inst_id = np.max(obj_inst) + 1
+        if len(placement_idx):
+            obj_idx = np.where(sem_label == obj_paste_id)[0]
+            obj_inst = inst_label[obj_idx]
 
-    obj_paste_lbl = np.full((obj_to_paste.shape[0], 1), obj_paste_id, dtype=np.int32)
-    obj_paste_inst = np.full((obj_to_paste.shape[0], 1), new_inst_id, dtype=np.int32)
-    
-    obj_paste_inst = obj_paste_inst << 16
-    obj_combined_lbl = obj_paste_lbl + obj_paste_inst
+            if len(obj_inst):
+                new_inst_id = np.max(obj_inst) + 1
 
-    save_scan = np.vstack((scan, obj_to_paste))
-    save_label = np.vstack((label, obj_combined_lbl))
+            else:
+                new_inst_id = 1
 
-    save_scan.tofile(os.path.join(save_path, "velodyne", scan_names[i]))
-    save_label.tofile(os.path.join(save_path, "labels", label_names[i]))
+            obj_paste_lbl = np.full((obj_to_paste.shape[0], 1), obj_paste_id, dtype=np.int32)
+            obj_paste_inst = np.full((obj_to_paste.shape[0], 1), new_inst_id, dtype=np.int32)
+            
+            obj_paste_inst = obj_paste_inst << 16
+            obj_combined_lbl = obj_paste_lbl + obj_paste_inst
 
-    print(scan_names[i], label_names[i])
+            save_scan = np.vstack((scan, obj_to_paste))
+            save_label = np.vstack((label, obj_combined_lbl))
+
+            scan  = save_scan
+            label = save_label
+
+        else:
+            fail += 1
+            break
+
+    scan.tofile(os.path.join(save_path, "velodyne", scan_names[i]))
+    label.tofile(os.path.join(save_path, "labels", label_names[i]))
+
+    print(scan_names[i], label_names[i], "Fail : " + str(fail))

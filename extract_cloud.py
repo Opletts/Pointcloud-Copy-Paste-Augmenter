@@ -2,12 +2,14 @@ import os
 import yaml
 import numpy as np
 
-data_path = "./data/sequences/00"
+from params import *
 
-CFG = yaml.safe_load(open('./semantic-kitti.yaml', 'r'))
+data_path = DATA_PATH
+
+CFG = yaml.safe_load(open(YAML_PATH, 'r'))
 label_dict = CFG['labels']
 
-label_id = 252
+label_id = LABEL_ID
 label_name = label_dict[label_id]
 
 os.makedirs(label_name, exist_ok=True)
@@ -19,7 +21,7 @@ label_names = os.listdir(os.path.join(data_path, "labels"))
 label_names.sort()
 
 cnt = 1
-min_pts = 200
+min_pts = MIN_PTS
 
 for i in range(len(scan_names)):
     scan = np.fromfile(os.path.join(data_path, "velodyne", scan_names[i]), dtype=np.float32)
